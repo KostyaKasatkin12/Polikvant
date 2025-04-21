@@ -9,6 +9,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from datetime import datetime, timedelta
 
 # Инициализация бота
 API_TOKEN = ""
@@ -116,6 +117,27 @@ async def send_quotes_periodically():
         await asyncio.sleep(300)  # 5 минут = 300 секунд
 
 
+# Фоновая задача для отправки напоминаний о задачах
+async def send_task_reminders():
+    while True:
+        conn = sqlite3.connect("schedule.db")
+        c = conn.cursor()
+        c.execute("SELECT user_id, task, time FROM tasks")
+        tasks = c.fetchall()
+        conn.close()
+
+        current_time = datetime.now().strftime("%H:%M")
+        reminder_window = (datetime.now() + timedelta(minutes=10)).strftime("%H:%M")
+
+        for user_id, task, time in tasks:
+            if current_time <= time <= reminder_window:
+                try:
+                    await bot.send_message(user_id, f"⏰ Напоминание: Задача '{task}' в {time}!")
+                except Exception as e:
+                    print(f"Не удалось отправить напоминание пользователю {user_id}: {e}")
+        await asyncio.sleep(60)  # Проверять каждую минуту
+
+
 # Определение состояний для FSM
 class TaskForm(StatesGroup):
     category = State()
@@ -127,7 +149,7 @@ class TaskForm(StatesGroup):
 # Функция для создания кнопки "Меню"
 def get_menu_button():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Меню", callback_data="menu")]
+        [InlineKeyboardButton(text="📋 Меню", callback_data="menu")]
     ])
 
 
@@ -137,22 +159,22 @@ async def start_command(message: Message):
     user_id = message.from_user.id
     add_user(user_id)  # Добавляем пользователя в базу
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Школа", callback_data="category_school")],
-        [InlineKeyboardButton(text="Хобби", callback_data="category_hobby")],
-        [InlineKeyboardButton(text="Свободное время", callback_data="category_freetime")]
+        [InlineKeyboardButton(text="📚 Школа", callback_data="category_school")],
+        [InlineKeyboardButton(text="🎨 Хобби", callback_data="category_hobby")],
+        [InlineKeyboardButton(text="⏳ Свободное время", callback_data="category_freetime")]
     ])
-    await message.answer("Выберите категорию:", reply_markup=keyboard)
+    await message.answer("✨ Выберите категорию для управления задачами:", reply_markup=keyboard)
 
 
 # Обработка кнопки "Меню"
 @dp.callback_query(lambda c: c.data == "menu")
 async def process_menu(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Школа", callback_data="category_school")],
-        [InlineKeyboardButton(text="Хобби", callback_data="category_hobby")],
-        [InlineKeyboardButton(text="Свободное время", callback_data="category_freetime")]
+        [InlineKeyboardButton(text="📚 Школа", callback_data="category_school")],
+        [InlineKeyboardButton(text="🎨 Хобби", callback_data="category_hobby")],
+        [InlineKeyboardButton(text="⏳ Свободное время", callback_data="category_freetime")]
     ])
-    await callback.message.edit_text("Выберите категорию:", reply_markup=keyboard)
+    await callback.message.edit_text("✨ Выберите категорию:", reply_markup=keyboard)
     await callback.answer()
 
 
@@ -162,21 +184,22 @@ async def process_category(callback: CallbackQuery, state: FSMContext):
     category = callback.data.split("_")[1]
     await state.update_data(category=category)
 
+    category_display = {"school": "Школа 📚", "hobby": "Хобби 🎨", "freetime": "Свободное время ⏳"}
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="Добавить задачу", callback_data=f"add_{category}"),
-            InlineKeyboardButton(text="Посмотреть все", callback_data=f"view_{category}")
+            InlineKeyboardButton(text="➕ Добавить задачу", callback_data=f"add_{category}"),
+            InlineKeyboardButton(text="📋 Посмотреть все", callback_data=f"view_{category}")
         ],
-        [InlineKeyboardButton(text="Удалить задачу", callback_data=f"delete_{category}")]
+        [InlineKeyboardButton(text="🗑️ Удалить задачу", callback_data=f"delete_{category}")]
     ])
-    await callback.message.edit_text(f"Выбрана категория: {category.capitalize()}", reply_markup=keyboard)
+    await callback.message.edit_text(f"Выбрана категория: {category_display[category]}", reply_markup=keyboard)
     await callback.answer()
 
 
 # Обработка кнопки "Добавить задачу"
 @dp.callback_query(lambda c: c.data.startswith("add_"))
 async def add_task(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Введите описание задачи:")
+    await callback.message.edit_text("📝 Введите описание задачи:")
     await state.set_state(TaskForm.task)
     await callback.answer()
 
@@ -185,7 +208,7 @@ async def add_task(callback: CallbackQuery, state: FSMContext):
 @dp.message(TaskForm.task)
 async def process_task_description(message: Message, state: FSMContext):
     await state.update_data(task=message.text)
-    await message.answer("Введите время выполнения задачи (например, 14:00):", reply_markup=get_menu_button())
+    await message.answer("⏰ Введите время выполнения задачи (например, 14:00):", reply_markup=get_menu_button())
     await state.set_state(TaskForm.time)
 
 
@@ -206,8 +229,9 @@ async def process_task_time(message: Message, state: FSMContext):
     conn.commit()
     conn.close()
 
+    category_display = {"school": "Школа 📚", "hobby": "Хобби 🎨", "freetime": "Свободное время ⏳"}
     await message.answer(
-        f"Задача '{task}' добавлена в категорию '{category.capitalize()}' на {time}!",
+        f"✅ Задача '{task}' добавлена в категорию '{category_display[category]}' на {time}!",
         reply_markup=get_menu_button()
     )
     await state.clear()
@@ -226,12 +250,13 @@ async def view_tasks(callback: CallbackQuery):
     tasks = c.fetchall()
     conn.close()
 
+    category_display = {"school": "Школа 📚", "hobby": "Хобби 🎨", "freetime": "Свободное время ⏳"}
     if tasks:
-        response = f"Задачи в категории '{category.capitalize()}':\n"
+        response = f"📋 Задачи в категории '{category_display[category]}':\n"
         for task_id, task, time in tasks:
             response += f"ID: {task_id} - {task} ({time})\n"
     else:
-        response = f"В категории '{category.capitalize()}' пока нет задач."
+        response = f"😔 В категории '{category_display[category]}' пока нет задач."
 
     await callback.message.edit_text(response, reply_markup=get_menu_button())
     await callback.answer()
@@ -242,7 +267,7 @@ async def view_tasks(callback: CallbackQuery):
 async def delete_task_prompt(callback: CallbackQuery, state: FSMContext):
     category = callback.data.split("_")[1]
     await state.update_data(category=category)
-    await callback.message.edit_text("Введите номер (ID) задачи для удаления:")
+    await callback.message.edit_text("🗑️ Введите номер (ID) задачи для удаления:")
     await state.set_state(TaskForm.delete_id)
     await callback.answer()
 
@@ -256,7 +281,7 @@ async def process_task_deletion(message: Message, state: FSMContext):
     try:
         task_id = int(message.text)
     except ValueError:
-        await message.answer("Пожалуйста, введите корректный номер задачи (целое число).",
+        await message.answer("❌ Пожалуйста, введите корректный номер задачи (целое число).",
                              reply_markup=get_menu_button())
         return
 
@@ -270,9 +295,10 @@ async def process_task_deletion(message: Message, state: FSMContext):
         c.execute("DELETE FROM tasks WHERE id = ? AND user_id = ? AND category = ?",
                   (task_id, user_id, category))
         conn.commit()
-        await message.answer(f"Задача с ID {task_id} удалена!", reply_markup=get_menu_button())
+        await message.answer(f"🗑️ Задача с ID {task_id} удалена!", reply_markup=get_menu_button())
     else:
-        await message.answer(f"Задача с ID {task_id} не найдена в категории '{category.capitalize()}'.",
+        category_display = {"school": "Школа 📚", "hobby": "Хобби 🎨", "freetime": "Свободное время ⏳"}
+        await message.answer(f"❌ Задача с ID {task_id} не найдена в категории '{category_display[category]}'.",
                              reply_markup=get_menu_button())
     conn.close()
     await state.clear()
@@ -282,8 +308,9 @@ async def process_task_deletion(message: Message, state: FSMContext):
 async def main():
     # Загружаем цитаты при старте
     fetch_quotes()
-    # Запускаем фоновую задачу отправки цитат
+    # Запускаем фоновые задачи
     asyncio.create_task(send_quotes_periodically())
+    asyncio.create_task(send_task_reminders())
     # Запускаем polling
     await dp.start_polling(bot)
 
@@ -291,4 +318,3 @@ async def main():
 if __name__ == "__main__":
     print('Бот Дисциплина запущен')
     asyncio.run(main())
-
